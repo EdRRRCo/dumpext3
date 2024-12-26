@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <string.h>
+#include <set>
 
 class ext2_t
 {
@@ -46,7 +47,9 @@ public:
     void dump_inode(unsigned _int32 inode); // 打印指定索引节点
     void ls_root(); // 查找并显示根目录内容
     unsigned int* read_block(unsigned int block_num);
-    void get_file_blocks(unsigned _int32 inode_num);
+    void get_file_blocks(unsigned _int32 inode_num); // 获取文件的数据块，支持多级索引
+    bool validate_block_number(unsigned int block_num, const char* block_type);
+    void read_indirect_block(unsigned int block_num, int level, std::set<unsigned int>& seen_blocks);
 
 
     bool valid; // 文件系统是否有效

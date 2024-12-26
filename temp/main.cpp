@@ -59,7 +59,7 @@ int main(int argc, char* argv[])
         }
         else if (arg[0] == "dump_inode") // 显示索引节点命令
         {
-            unsigned __int32 in = (unsigned __int32)_strtoi64(arg[1].c_str(), NULL, 16);
+            unsigned __int32 in = (unsigned __int32)_strtoi64(arg[1].c_str(), NULL, 10);
             ext2.dump_inode(in);
         }
         else if (arg[0] == "ls_root") // 查找根目录命令
@@ -68,8 +68,17 @@ int main(int argc, char* argv[])
         }
         else if (arg[0] == "ls")
         {
-            // 假设 inode 号为 3 是你要获取的文件的 inode
-            ext2.get_file_blocks(11);  // 获取 inode 3 对应文件的所有数据块
+            if (arg.size() < 2) {
+                printf("Usage: ls <inode_number>\n");
+            }
+            else {
+                unsigned __int32 inode_num = (unsigned __int32)_strtoi64(arg[1].c_str(), NULL, 10);
+                ext2.get_file_blocks(inode_num);  // 获取指定 inode 对应文件的所有数据块
+            }
+        }
+        else if (arg[0] == "super")
+        {
+            ext2.dump_super_block();
         }
         else
         {
@@ -85,6 +94,7 @@ int main(int argc, char* argv[])
             printf("dump_inode N   显示文件系统中的第 N 个索引节点\n");
             printf("ls_root   显示根目录内容\n");
             printf("ls   显示根目录内容\n");
+
 
         }
     }

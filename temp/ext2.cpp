@@ -29,15 +29,12 @@ unsigned int* ext2_t::read_block(unsigned int block_num)
     return block;
 }
 
-// 获取文件的数据块，支持多级索引
-void ext2_t::get_file_blocks(unsigned _int32 inode_num)
-{
+void ext2_t::get_file_blocks(unsigned _int32 inode_num) {
     if (inode_num < 1 || inode_num > inodes_count) {
         printf("Invalid inode number.\n");
         return;
     }
 
-    printf("inodes_count: %lu\n", inodes_count);
     // 读取inode
     unsigned char* inode = new unsigned char[inode_size];
     if (!inode) {
@@ -45,110 +42,105 @@ void ext2_t::get_file_blocks(unsigned _int32 inode_num)
         return;
     }
 
-    // 计算 inode 所在的块组
+    // 计算 inode 所在的块组和偏移
     unsigned int gn = (inode_num - 1) / inodes_per_group;
     unsigned int index = (inode_num - 1) % inodes_per_group;
-    printf("Inode number: %u\n", inode_num);
-    printf("Group number: %u, Index in group: %u\n", gn, index);
 
+    // 获取块组描述符表中的 inode 表位置
+    unsigned long bgdt_offset = gn * 32;
+    if (bgdt_offset >= block_group_count * 32) {
+        printf("Invalid block group number.\n");
+        delete[] inode;
+        return;
+    }
 
-    unsigned long bgdt = *(unsigned long*)(block_group_descriptor_table + gn * 32 + 8);
-    printf("Block group descriptor entry for group %u: %lu\n", gn, bgdt);
+    unsigned long inode_table_block = *(unsigned long*)(block_group_descriptor_table + bgdt_offset + 8);
+    if (inode_table_block >= blocks_count) {
+        printf("Invalid inode table block number.\n");
+        delete[] inode;
+        return;
+    }
 
-    unsigned long inode_table_offset = partition_start * 512 + bgdt * block_size + index * inode_size;
-    printf("Inode table offset: %lu\n", inode_table_offset);
+    // 计算 inode 在文件系统中的实际位置
+    unsigned long long inode_offset = (unsigned long long)partition_start * 512 +
+        (unsigned long long)inode_table_block * block_size +
+        (unsigned long long)index * inode_size;
 
-    _fseeki64(fp, inode_table_offset, SEEK_SET);
-    fread(inode, inode_size, 1, fp);
+    // 读取 inode
+    if (_fseeki64(fp, inode_offset, SEEK_SET) != 0) {
+        printf("Failed to seek to inode position.\n");
+        delete[] inode;
+        return;
+    }
 
-    // 获取 inode 中的 i_block 数组，表示数据块的指针
-    unsigned int* block_pointers = new unsigned int[15]; // 12 个直接指针 + 3 个间接指针
-    memcpy(block_pointers, inode + 0x28, 60);  // 从 inode 结构中复制数据块指针
+    if (fread(inode, inode_size, 1, fp) != 1) {
+        printf("Failed to read inode.\n");
+        delete[] inode;
+        return;
+    }
 
-    // 处理直接指针（前 12 个）
-    for (int i = 0; i < 12; ++i) {
+    // 获取文件大小以确定是否需要处理间接块
+    unsigned int file_size = *(unsigned int*)(inode + 0x04);
+    printf("File size: %u bytes\n", file_size);
+
+    // 获取 i_block 数组
+    unsigned int* block_pointers = new unsigned int[15];
+    memcpy(block_pointers, inode + 0x28, 60);
+
+    // 处理直接块
+    for (int i = 0; i < 12; i++) {
         if (block_pointers[i] != 0) {
+            if (block_pointers[i] >= blocks_count) {
+                printf("Warning: Invalid direct block number: %u\n", block_pointers[i]);
+                continue;
+            }
             printf("Direct block %d: %u\n", i, block_pointers[i]);
         }
     }
 
-    // 处理一级间接索引
-    
-    if (block_pointers[12] != 0) {
-        unsigned int* indirect_block = read_block(block_pointers[12]);
-        if (block_pointers[12] > blocks_count) {
-            printf("Invalid block pointer: %u\n", block_pointers[12]);
-            return;
-        }
-        if (indirect_block) {
-            for (int i = 0; i < BLOCK_SIZE / POINTER_SIZE; ++i) {
-                if (indirect_block[i] != 0) {
-                    printf("Indirect block 1 - Block %d: %u\n", i, indirect_block[i]);
+    // 处理一级间接块
+    if (block_pointers[12] != 0 && block_pointers[12] < blocks_count && inode_num == 12) {
+        printf("\nSingle indirect block: %u\n", block_pointers[12]);
+        unsigned int* indirect = read_block(block_pointers[12]);
+        if (indirect) {
+            int entries = block_size / sizeof(unsigned int);
+            for (int i = 0; i < entries; i++) {
+                if (indirect[i] != 0 && indirect[i] < blocks_count) {
+                    printf("  Block %d: %u\n", i, indirect[i]);
                 }
             }
-            delete[] indirect_block;
+            delete[] indirect;
         }
     }
 
-    // 处理二级间接索引
-    
-    if (block_pointers[13] != 0) {
-        unsigned int* indirect_block1 = read_block(block_pointers[13]);
-        if (block_pointers[13] > blocks_count) {
-            printf("Invalid block pointer: %u\n", block_pointers[12]);
-            return;
-        }
-        if (indirect_block1) {
-            for (int i = 0; i < BLOCK_SIZE / POINTER_SIZE; ++i) {
-                if (indirect_block1[i] != 0) {
-                    unsigned int* indirect_block2 = read_block(indirect_block1[i]);
-                    if (indirect_block2) {
-                        for (int j = 0; j < BLOCK_SIZE / POINTER_SIZE; ++j) {
-                            if (indirect_block2[j] != 0) {
-                                printf("Indirect block 2 - Block %d: %u\n", j, indirect_block2[j]);
+    // 处理二级间接块
+    if (block_pointers[13] != 0 && block_pointers[13] < blocks_count&& inode_num== 13) {
+        printf("\nDouble indirect block: %u\n", block_pointers[13]);
+        unsigned int* dbl_indirect = read_block(block_pointers[13]);
+        if (dbl_indirect) {
+            int entries = block_size / sizeof(unsigned int);
+            for (int i = 0; i < entries; i++) {
+                if (dbl_indirect[i] != 0 && dbl_indirect[i] < blocks_count) {
+                    printf("  Single indirect block %d: %u\n", i, dbl_indirect[i]);
+                    unsigned int* indirect = read_block(dbl_indirect[i]);
+                    if (indirect) {
+                        for (int j = 0; j < entries; j++) {
+                            if (indirect[j] != 0 && indirect[j] < blocks_count) {
+                                printf("    Block %d: %u\n", j, indirect[j]);
                             }
                         }
-                        delete[] indirect_block2;
+                        delete[] indirect;
                     }
                 }
             }
-            delete[] indirect_block1;
+            delete[] dbl_indirect;
         }
     }
 
-    // 处理三级间接索引
-    if (block_pointers[14] != 0) {
-        unsigned int* indirect_block1 = read_block(block_pointers[14]);
-        if (indirect_block1) {
-            for (int i = 0; i < BLOCK_SIZE / POINTER_SIZE; ++i) {
-                if (indirect_block1[i] != 0) {
-                    unsigned int* indirect_block2 = read_block(indirect_block1[i]);
-                    if (indirect_block2) {
-                        for (int j = 0; j < BLOCK_SIZE / POINTER_SIZE; ++j) {
-                            if (indirect_block2[j] != 0) {
-                                unsigned int* indirect_block3 = read_block(indirect_block2[j]);
-                                if (indirect_block3) {
-                                    for (int k = 0; k < BLOCK_SIZE / POINTER_SIZE; ++k) {
-                                        if (indirect_block3[k] != 0) {
-                                            printf("Indirect block 3 - Block %d: %u\n", k, indirect_block3[k]);
-                                        }
-                                    }
-                                    delete[] indirect_block3;
-                                }
-                            }
-                        }
-                        delete[] indirect_block2;
-                    }
-                }
-            }
-            delete[] indirect_block1;
-        }
-    }
-
-    // 释放内存
-    delete[] inode;
     delete[] block_pointers;
+    delete[] inode;
 }
+
 
 // 将文件名为 vdfn 的虚拟磁盘文件的第 p (>=0)个分区按照 ext2 文件系统解释
 ext2_t::ext2_t(const char* vdfn, int p)
