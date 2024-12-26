@@ -37,6 +37,7 @@ void ext2_t::get_file_blocks(unsigned _int32 inode_num)
         return;
     }
 
+    printf("inodes_count: %lu\n", inodes_count);
     // 读取inode
     unsigned char* inode = new unsigned char[inode_size];
     if (!inode) {
@@ -47,9 +48,16 @@ void ext2_t::get_file_blocks(unsigned _int32 inode_num)
     // 计算 inode 所在的块组
     unsigned int gn = (inode_num - 1) / inodes_per_group;
     unsigned int index = (inode_num - 1) % inodes_per_group;
+    printf("Inode number: %u\n", inode_num);
+    printf("Group number: %u, Index in group: %u\n", gn, index);
+
 
     unsigned long bgdt = *(unsigned long*)(block_group_descriptor_table + gn * 32 + 8);
+    printf("Block group descriptor entry for group %u: %lu\n", gn, bgdt);
+
     unsigned long inode_table_offset = partition_start * 512 + bgdt * block_size + index * inode_size;
+    printf("Inode table offset: %lu\n", inode_table_offset);
+
     _fseeki64(fp, inode_table_offset, SEEK_SET);
     fread(inode, inode_size, 1, fp);
 
@@ -65,8 +73,13 @@ void ext2_t::get_file_blocks(unsigned _int32 inode_num)
     }
 
     // 处理一级间接索引
+    
     if (block_pointers[12] != 0) {
         unsigned int* indirect_block = read_block(block_pointers[12]);
+        if (block_pointers[12] > blocks_count) {
+            printf("Invalid block pointer: %u\n", block_pointers[12]);
+            return;
+        }
         if (indirect_block) {
             for (int i = 0; i < BLOCK_SIZE / POINTER_SIZE; ++i) {
                 if (indirect_block[i] != 0) {
@@ -78,8 +91,13 @@ void ext2_t::get_file_blocks(unsigned _int32 inode_num)
     }
 
     // 处理二级间接索引
+    
     if (block_pointers[13] != 0) {
         unsigned int* indirect_block1 = read_block(block_pointers[13]);
+        if (block_pointers[13] > blocks_count) {
+            printf("Invalid block pointer: %u\n", block_pointers[12]);
+            return;
+        }
         if (indirect_block1) {
             for (int i = 0; i < BLOCK_SIZE / POINTER_SIZE; ++i) {
                 if (indirect_block1[i] != 0) {
@@ -216,7 +234,8 @@ void ext2_t::dump_super_block()
 // 显示指定索引节点的内容
 void ext2_t::dump_inode(unsigned _int32 i)
 {
-    if (i<0 || i> inodes_count) return; // 不存在索引节点号为 0 的索引节点
+    if (i<0 || i> inodes_count) 
+        return; // 不存在索引节点号为 0 的索引节点
     unsigned __int8* inode = new unsigned __int8[inode_size];
     if (!inode) return;
 
