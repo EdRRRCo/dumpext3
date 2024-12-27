@@ -80,6 +80,67 @@ int main(int argc, char* argv[])
         {
             ext2.dump_super_block();
         }
+        else if (arg[0] == "mkdir") // 创建新目录命令
+        {
+            if (arg.size() < 3) {
+                printf("Usage: mkdir <parent_inode> <directory_name>\n");
+            }
+            else {
+                unsigned __int32 parent_inode = (unsigned __int32)_strtoi64(arg[1].c_str(), NULL, 10);
+                ext2.create_directory(parent_inode, arg[2].c_str());
+            }
+        }
+        else if (arg[0] == "touch") {
+            if (arg.size() < 3) {
+                printf("Usage: touch <parent_inode> <filename>\n");
+            }
+            else {
+                unsigned int parent_inode = (unsigned int)_strtoi64(arg[1].c_str(), NULL, 10);
+                unsigned int mode = 0x81A4; // 普通文件，权限 644
+                ext2.create_file(parent_inode, arg[2].c_str(), mode);
+            }
+        }
+        else if (arg[0] == "write") {
+            if (arg.size() < 3) {
+                printf("Usage: write <inode_num> <content>\n");
+            }
+            else {
+                unsigned int inode_num = (unsigned int)_strtoi64(arg[1].c_str(), NULL, 10);
+                ext2.write_file(inode_num, arg[2].c_str(), strlen(arg[2].c_str()));
+            }
+        }
+        else if (arg[0] == "read") {
+            if (arg.size() < 2) {
+                printf("Usage: read <inode_num>\n");
+            }
+            else {
+                unsigned int inode_num = (unsigned int)_strtoi64(arg[1].c_str(), NULL, 10);
+                size_t size;
+                char* content = ext2.read_file(inode_num, &size);
+                if (content) {
+                    printf("File content: %s\n", content);
+                    delete[] content;
+                }
+            }
+        }
+        else if (arg[0] == "rm") {
+            if (arg.size() < 3) {
+                printf("Usage: rm <parent_inode> <name>\n");
+            }
+            else {
+                unsigned int parent_inode = (unsigned int)_strtoi64(arg[1].c_str(), NULL, 10);
+                ext2.delete_file(parent_inode, arg[2].c_str());
+            }
+        }
+        else if (arg[0] == "rmdir") {
+            if (arg.size() < 3) {
+                printf("Usage: rmdir <parent_inode> <dirname>\n");
+            }
+            else {
+                unsigned int parent_inode = (unsigned int)_strtoi64(arg[1].c_str(), NULL, 10);
+                ext2.delete_directory(parent_inode, arg[2].c_str());
+            }
+        }
         else
         {
             if (arg[0] == "?" || arg[0] == "h" || arg[0] == "H") // 帮助命令
@@ -94,12 +155,15 @@ int main(int argc, char* argv[])
             printf("dump_inode N   显示文件系统中的第 N 个索引节点\n");
             printf("ls_root   显示根目录内容\n");
             printf("ls   显示根目录内容\n");
-
-
+            printf("mkdir <parent_inode> <directory_name>   创建新目录\n");
+            printf("touch <parent_inode> <filename>    创建新文件\n");
+            printf("write <inode_num> <content>        写入文件内容\n");
+            printf("read <inode_num>        读取文件内容\n");
+            printf("rm <parent_inode> <name>        删除指定文件\n");
+            printf("rmdir <parent_inode> <dirname>        删除指定文件\n");
         }
     }
 
     return 0;
 }
-
 

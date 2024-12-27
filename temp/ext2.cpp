@@ -114,7 +114,7 @@ void ext2_t::get_file_blocks(unsigned _int32 inode_num) {
     }
 
     // 处理二级间接块
-    if (block_pointers[13] != 0 && block_pointers[13] < blocks_count&& inode_num== 13) {
+    if (block_pointers[13] != 0 && block_pointers[13] < blocks_count && inode_num == 13) {
         printf("\nDouble indirect block: %u\n", block_pointers[13]);
         unsigned int* dbl_indirect = read_block(block_pointers[13]);
         if (dbl_indirect) {
@@ -146,7 +146,7 @@ void ext2_t::get_file_blocks(unsigned _int32 inode_num) {
 ext2_t::ext2_t(const char* vdfn, int p)
 {
     valid = false;
-    fp = fopen("d:\\20GB-flat.vmdk", "rb"); // 以仅读二进制方式打开
+    fp = fopen("d:\\20GB-flat.vmdk", "r+b"); // 以仅读二进制方式打开
     if (!fp)
     {
         printf("Open fail\n");
@@ -226,7 +226,7 @@ void ext2_t::dump_super_block()
 // 显示指定索引节点的内容
 void ext2_t::dump_inode(unsigned _int32 i)
 {
-    if (i<0 || i> inodes_count) 
+    if (i<0 || i> inodes_count)
         return; // 不存在索引节点号为 0 的索引节点
     unsigned __int8* inode = new unsigned __int8[inode_size];
     if (!inode) return;
@@ -306,4 +306,796 @@ void ext2_t::ls_root()
 
     delete[] block_data;
     delete[] inode;
+}
+
+void ext2_t::create_directory(unsigned _int32 parent_inode, const char* dir_name) {
+    // 检查父目录 inode 是否有效
+    if (parent_inode < 1 || parent_inode > inodes_count) {
+        printf("Invalid parent inode number.\n");
+        return;
+    }
+
+    // 读取父目录 inode
+    unsigned char* parent_inode_data = new unsigned char[inode_size];
+    if (!parent_inode_data) {
+        printf("Memory allocation failed for parent inode.\n");
+        return;
+    }
+
+    // 计算父 inode 位置
+    unsigned int parent_gn = (parent_inode - 1) / inodes_per_group;
+    unsigned int parent_index = (parent_inode - 1) % inodes_per_group;
+    unsigned long parent_inode_table_block = *(unsigned long*)(block_group_descriptor_table + parent_gn * 32 + 8);
+    unsigned long long parent_inode_offset = (unsigned long long)partition_start * 512 +
+        (unsigned long long)parent_inode_table_block * block_size +
+        (unsigned long long)parent_index * inode_size;
+
+    // 读取父 inode
+    if (_fseeki64(fp, parent_inode_offset, SEEK_SET) != 0 ||
+        fread(parent_inode_data, inode_size, 1, fp) != 1) {
+        printf("Failed to read parent inode.\n");
+        delete[] parent_inode_data;
+        return;
+    }
+
+    // 验证父目录是否为目录类型
+    unsigned short parent_mode = *(unsigned short*)(parent_inode_data + 0x00);
+    if ((parent_mode & 0x4000) != 0x4000) {
+        printf("Parent inode is not a directory.\n");
+        delete[] parent_inode_data;
+        return;
+    }
+
+    // 分配新的 inode
+    unsigned int new_inode_num = allocate_inode();
+    if (new_inode_num == 0) {
+        printf("Failed to allocate inode.\n");
+        delete[] parent_inode_data;
+        return;
+    }
+
+    // 分配新的数据块
+    unsigned int new_block = allocate_block();
+    if (new_block == 0) {
+        printf("Failed to allocate block.\n");
+        delete[] parent_inode_data;
+        return;
+    }
+
+    // 创建并初始化新目录的 inode
+    unsigned char* new_inode = new unsigned char[inode_size];
+    memset(new_inode, 0, inode_size);
+
+    // 设置新目录 inode 的属性
+    time_t current_time = time(NULL);
+    *(unsigned short*)(new_inode + 0x00) = 0x41ED;    // i_mode: 目录类型 + 权限
+    *(unsigned short*)(new_inode + 0x02) = 0;         // i_uid
+    *(unsigned int*)(new_inode + 0x04) = block_size;  // i_size: 目录大小
+    *(unsigned int*)(new_inode + 0x08) = current_time; // i_atime
+    *(unsigned int*)(new_inode + 0x0C) = current_time; // i_ctime
+    *(unsigned int*)(new_inode + 0x10) = current_time; // i_mtime
+    *(unsigned int*)(new_inode + 0x14) = 0;           // i_dtime
+    *(unsigned short*)(new_inode + 0x18) = 0;         // i_gid
+    *(unsigned short*)(new_inode + 0x1A) = 2;         // i_links_count: . 和 ..
+    *(unsigned int*)(new_inode + 0x1C) = 1;           // i_blocks (以512字节为单位)
+    *(unsigned int*)(new_inode + 0x28) = new_block;   // i_block[0]
+
+    // 写入新的 inode
+    unsigned int new_gn = (new_inode_num - 1) / inodes_per_group;
+    unsigned int new_index = (new_inode_num - 1) % inodes_per_group;
+    unsigned long new_inode_table_block = *(unsigned long*)(block_group_descriptor_table + new_gn * 32 + 8);
+    unsigned long long new_inode_offset = (unsigned long long)partition_start * 512 +
+        (unsigned long long)new_inode_table_block * block_size +
+        (unsigned long long)new_index * inode_size;
+
+    if (_fseeki64(fp, new_inode_offset, SEEK_SET) != 0 ||
+        fwrite(new_inode, inode_size, 1, fp) != 1) {
+        printf("Failed to write new inode.\n");
+        delete[] new_inode;
+        delete[] parent_inode_data;
+        return;
+    }
+
+    // 初始化新目录的数据块
+    unsigned char* dir_block = new unsigned char[block_size];
+    memset(dir_block, 0, block_size);
+
+    // 创建 "." 目录项
+    struct ext2_dir_entry {
+        unsigned int inode;
+        unsigned short rec_len;
+        unsigned char name_len;
+        unsigned char file_type;
+        char name[256];
+    } *dir_entry;
+
+    dir_entry = (ext2_dir_entry*)dir_block;
+    dir_entry->inode = new_inode_num;
+    dir_entry->name_len = 1;
+    dir_entry->file_type = 2;  // 目录类型
+    strcpy(dir_entry->name, ".");
+    dir_entry->rec_len = 12;  // 4 + 2 + 1 + 1 + 4 (对齐到4字节)
+
+    // 创建 ".." 目录项
+    dir_entry = (ext2_dir_entry*)(dir_block + dir_entry->rec_len);
+    dir_entry->inode = parent_inode;
+    dir_entry->name_len = 2;
+    dir_entry->file_type = 2;
+    strcpy(dir_entry->name, "..");
+    dir_entry->rec_len = block_size - 12;  // 剩余空间全部分配给 ".."
+
+    // 写入目录数据块
+    if (_fseeki64(fp, (unsigned long long)partition_start * 512 + new_block * block_size, SEEK_SET) != 0 ||
+        fwrite(dir_block, block_size, 1, fp) != 1) {
+        printf("Failed to write directory block.\n");
+        delete[] dir_block;
+        delete[] new_inode;
+        delete[] parent_inode_data;
+        return;
+    }
+
+    // 更新父目录
+    unsigned int parent_block = *(unsigned int*)(parent_inode_data + 0x28);
+    unsigned char* parent_block_data = new unsigned char[block_size];
+    if (_fseeki64(fp, (unsigned long long)partition_start * 512 + parent_block * block_size, SEEK_SET) != 0 ||
+        fread(parent_block_data, block_size, 1, fp) != 1) {
+        printf("Failed to read parent directory block.\n");
+        delete[] parent_block_data;
+        delete[] dir_block;
+        delete[] new_inode;
+        delete[] parent_inode_data;
+        return;
+    }
+
+    // 查找父目录中的空闲空间
+    unsigned int offset = 0;
+    while (offset < block_size) {
+        dir_entry = (ext2_dir_entry*)(parent_block_data + offset);
+        if (offset + dir_entry->rec_len >= block_size) {
+            // 找到最后一个目录项
+            unsigned int actual_len = 8 + ((dir_entry->name_len + 3) & ~3);
+            if (dir_entry->rec_len - actual_len >= 8 + ((strlen(dir_name) + 3) & ~3)) {
+                // 有足够空间插入新目录项
+                unsigned int new_rec_len = dir_entry->rec_len - actual_len;
+                dir_entry->rec_len = actual_len;
+
+                // 创建新目录项
+                dir_entry = (ext2_dir_entry*)(parent_block_data + offset + actual_len);
+                dir_entry->inode = new_inode_num;
+                dir_entry->name_len = strlen(dir_name);
+                dir_entry->file_type = 2;
+                strcpy(dir_entry->name, dir_name);
+                dir_entry->rec_len = new_rec_len;
+
+                break;
+            }
+        }
+        offset += dir_entry->rec_len;
+    }
+
+    // 更新父目录的修改时间
+    *(unsigned int*)(parent_inode_data + 0x10) = current_time; // i_mtime
+    *(unsigned int*)(parent_inode_data + 0x0C) = current_time; // i_ctime
+
+    // 增加父目录的链接计数
+    unsigned short parent_links = *(unsigned short*)(parent_inode_data + 0x1A);
+    *(unsigned short*)(parent_inode_data + 0x1A) = parent_links + 1;
+
+    // 写回父目录的 inode 和数据块
+    if (_fseeki64(fp, parent_inode_offset, SEEK_SET) != 0 ||
+        fwrite(parent_inode_data, inode_size, 1, fp) != 1 ||
+        _fseeki64(fp, (unsigned long long)partition_start * 512 + parent_block * block_size, SEEK_SET) != 0 ||
+        fwrite(parent_block_data, block_size, 1, fp) != 1) {
+        printf("Failed to update parent directory.\n");
+    }
+
+    printf("Directory '%s' created successfully with inode %u\n", dir_name, new_inode_num);
+
+    // 清理
+    delete[] parent_block_data;
+    delete[] dir_block;
+    delete[] new_inode;
+    delete[] parent_inode_data;
+}
+
+unsigned int ext2_t::allocate_block() {
+    // 遍历所有块组，查找空闲块
+    for (unsigned int group = 0; group < block_group_count; group++) {
+        // 读取块位图
+        unsigned long bgdt_offset = group * 32;
+        unsigned long block_bitmap_block = *(unsigned long*)(block_group_descriptor_table + bgdt_offset);
+        unsigned char* block_bitmap = new unsigned char[block_size];
+        if (!block_bitmap) {
+            printf("Memory allocation failed for block bitmap.\n");
+            return 0;
+        }
+
+        _fseeki64(fp, (unsigned long long)partition_start * 512 + block_bitmap_block * block_size, SEEK_SET);
+        fread(block_bitmap, block_size, 1, fp);
+
+        // 查找空闲块
+        for (unsigned int byte = 0; byte < block_size; byte++) {
+            if (block_bitmap[byte] != 0xFF) { // 不是全1，说明有空闲块
+                for (unsigned int bit = 0; bit < 8; bit++) {
+                    if (!(block_bitmap[byte] & (1 << bit))) { // 找到空闲块
+                        // 标记块为已使用
+                        block_bitmap[byte] |= (1 << bit);
+                        _fseeki64(fp, (unsigned long long)partition_start * 512 + block_bitmap_block * block_size, SEEK_SET);
+                        fwrite(block_bitmap, block_size, 1, fp);
+
+                        delete[] block_bitmap;
+                        return group * blocks_per_group + byte * 8 + bit;
+                    }
+                }
+            }
+        }
+
+        delete[] block_bitmap;
+    }
+
+    printf("No free blocks available.\n");
+    return 0;
+}
+
+unsigned int ext2_t::allocate_inode() {
+    // 遍历所有块组，查找空闲 inode
+    for (unsigned int group = 0; group < block_group_count; group++) {
+        // 读取 inode 位图
+        unsigned long bgdt_offset = group * 32;
+        unsigned long inode_bitmap_block = *(unsigned long*)(block_group_descriptor_table + bgdt_offset + 4);
+        unsigned char* inode_bitmap = new unsigned char[block_size];
+        if (!inode_bitmap) {
+            printf("Memory allocation failed for inode bitmap.\n");
+            return 0;
+        }
+
+        _fseeki64(fp, (unsigned long long)partition_start * 512 + inode_bitmap_block * block_size, SEEK_SET);
+        fread(inode_bitmap, block_size, 1, fp);
+
+        // 查找空闲 inode
+        for (unsigned int byte = 0; byte < block_size; byte++) {
+            if (inode_bitmap[byte] != 0xFF) { // 不是全1，说明有空闲 inode
+                for (unsigned int bit = 0; bit < 8; bit++) {
+                    if (!(inode_bitmap[byte] & (1 << bit))) { // 找到空闲 inode
+                        // 标记 inode 为已使用
+                        inode_bitmap[byte] |= (1 << bit);
+                        _fseeki64(fp, (unsigned long long)partition_start * 512 + inode_bitmap_block * block_size, SEEK_SET);
+                        fwrite(inode_bitmap, block_size, 1, fp);
+
+                        delete[] inode_bitmap;
+                        return group * inodes_per_group + byte * 8 + bit + 1; // inode 编号从 1 开始
+                    }
+                }
+            }
+        }
+
+        delete[] inode_bitmap;
+    }
+
+    printf("No free inodes available.\n");
+    return 0;
+}
+
+unsigned int ext2_t::create_file(unsigned _int32 parent_inode, const char* filename, unsigned int mode) {
+    // 分配新的 inode
+    unsigned int new_inode_num = allocate_inode();
+    if (new_inode_num == 0) {
+        printf("Failed to allocate inode for file.\n");
+        return 0;
+    }
+
+    // 初始化新的 inode
+    unsigned char* new_inode = new unsigned char[inode_size];
+    memset(new_inode, 0, inode_size);
+
+    // 设置文件 inode 的属性
+    time_t current_time = time(NULL);
+    *(unsigned short*)(new_inode + 0x00) = mode;          // i_mode: 普通文件 + 权限
+    *(unsigned short*)(new_inode + 0x02) = 0;             // i_uid
+    *(unsigned int*)(new_inode + 0x04) = 0;               // i_size: 初始大小为0
+    *(unsigned int*)(new_inode + 0x08) = current_time;    // i_atime
+    *(unsigned int*)(new_inode + 0x0C) = current_time;    // i_ctime
+    *(unsigned int*)(new_inode + 0x10) = current_time;    // i_mtime
+    *(unsigned short*)(new_inode + 0x1A) = 1;             // i_links_count
+
+    // 写入新的 inode
+    unsigned int new_gn = (new_inode_num - 1) / inodes_per_group;
+    unsigned int new_index = (new_inode_num - 1) % inodes_per_group;
+    unsigned long new_inode_table_block = *(unsigned long*)(block_group_descriptor_table + new_gn * 32 + 8);
+    unsigned long long new_inode_offset = (unsigned long long)partition_start * 512 +
+        (unsigned long long)new_inode_table_block * block_size +
+        (unsigned long long)new_index * inode_size;
+
+    if (_fseeki64(fp, new_inode_offset, SEEK_SET) != 0 ||
+        fwrite(new_inode, inode_size, 1, fp) != 1) {
+        printf("Failed to write new inode.\n");
+        delete[] new_inode;
+        return 0;
+    }
+
+    // 更新父目录
+    unsigned char* parent_inode_index = new unsigned char[inode_size];
+    unsigned int parent_gn = (parent_inode - 1) / inodes_per_group;
+    unsigned int parent_index = (parent_inode - 1) % inodes_per_group;
+    unsigned long parent_inode_table_block = *(unsigned long*)(block_group_descriptor_table + parent_gn * 32 + 8);
+    unsigned long long parent_inode_offset = (unsigned long long)partition_start * 512 +
+        (unsigned long long)parent_inode_table_block * block_size +
+        (unsigned long long)parent_index * inode_size;
+
+    if (_fseeki64(fp, parent_inode_offset, SEEK_SET) != 0 ||
+        fread(parent_inode_index, inode_size, 1, fp) != 1) {
+        printf("Failed to read parent inode.\n");
+        delete[] parent_inode_index;
+        delete[] new_inode;
+        return 0;
+    }
+
+    // 读取父目录的数据块
+    unsigned int parent_block = *(unsigned int*)(parent_inode + 0x28);
+    unsigned char* dir_block = new unsigned char[block_size];
+    if (_fseeki64(fp, (unsigned long long)partition_start * 512 + parent_block * block_size, SEEK_SET) != 0 ||
+        fread(dir_block, block_size, 1, fp) != 1) {
+        printf("Failed to read parent directory block.\n");
+        delete[] dir_block;
+        delete[] parent_inode_index;
+        delete[] new_inode;
+        return 0;
+    }
+
+    // 在父目录中添加新文件的目录项
+    struct ext2_dir_entry {
+        unsigned int inode;
+        unsigned short rec_len;
+        unsigned char name_len;
+        unsigned char file_type;
+        char name[256];
+    } *dir_entry;
+
+    unsigned int offset = 0;
+    while (offset < block_size) {
+        dir_entry = (ext2_dir_entry*)(dir_block + offset);
+        if (offset + dir_entry->rec_len >= block_size) {
+            // 找到最后一个目录项
+            unsigned int actual_len = 8 + ((dir_entry->name_len + 3) & ~3);
+            if (dir_entry->rec_len - actual_len >= 8 + ((strlen(filename) + 3) & ~3)) {
+                // 有足够空间插入新目录项
+                dir_entry->rec_len = actual_len;
+
+                // 创建新目录项
+                dir_entry = (ext2_dir_entry*)(dir_block + offset + actual_len);
+                dir_entry->inode = new_inode_num;
+                dir_entry->name_len = strlen(filename);
+                dir_entry->file_type = 1; // 普通文件
+                strcpy(dir_entry->name, filename);
+                dir_entry->rec_len = block_size - offset - actual_len;
+
+                // 写回目录块
+                if (_fseeki64(fp, (unsigned long long)partition_start * 512 + parent_block * block_size, SEEK_SET) != 0 ||
+                    fwrite(dir_block, block_size, 1, fp) != 1) {
+                    printf("Failed to write directory block.\n");
+                    delete[] dir_block;
+                    delete[] parent_inode_index;
+                    delete[] new_inode;
+                    return 0;
+                }
+                break;
+            }
+        }
+        offset += dir_entry->rec_len;
+    }
+
+    delete[] dir_block;
+    delete[] parent_inode_index;
+    delete[] new_inode;
+
+    printf("File '%s' created successfully with inode %u\n", filename, new_inode_num);
+    return new_inode_num;
+}
+
+bool ext2_t::write_file(unsigned int inode_num, const char* content, size_t size) {
+    // 读取文件的 inode
+    unsigned char* inode = new unsigned char[inode_size];
+    unsigned int gn = (inode_num - 1) / inodes_per_group;
+    unsigned int index = (inode_num - 1) % inodes_per_group;
+    unsigned long inode_table_block = *(unsigned long*)(block_group_descriptor_table + gn * 32 + 8);
+    unsigned long long inode_offset = (unsigned long long)partition_start * 512 +
+        (unsigned long long)inode_table_block * block_size +
+        (unsigned long long)index * inode_size;
+
+    if (_fseeki64(fp, inode_offset, SEEK_SET) != 0 ||
+        fread(inode, inode_size, 1, fp) != 1) {
+        printf("Failed to read inode.\n");
+        delete[] inode;
+        return false;
+    }
+
+    // 计算需要的块数
+    unsigned int blocks_needed = (size + block_size - 1) / block_size;
+    unsigned int* block_nums = new unsigned int[blocks_needed];
+
+    // 分配所需的块
+    for (unsigned int i = 0; i < blocks_needed; i++) {
+        block_nums[i] = allocate_block();
+        if (block_nums[i] == 0) {
+            printf("Failed to allocate block.\n");
+            delete[] block_nums;
+            delete[] inode;
+            return false;
+        }
+    }
+
+    // 更新 inode 的数据块指针
+    for (unsigned int i = 0; i < blocks_needed && i < 12; i++) {
+        *(unsigned int*)(inode + 0x28 + i * 4) = block_nums[i];
+    }
+
+    // 如果需要间接块
+    if (blocks_needed > 12) {
+        unsigned int indirect_block = allocate_block();
+        *(unsigned int*)(inode + 0x28 + 48) = indirect_block; // i_block[12]
+
+        unsigned int* indirect_data = new unsigned int[block_size / 4];
+        for (unsigned int i = 12; i < blocks_needed; i++) {
+            indirect_data[i - 12] = block_nums[i];
+        }
+
+        _fseeki64(fp, (unsigned long long)partition_start * 512 + indirect_block * block_size, SEEK_SET);
+        fwrite(indirect_data, block_size, 1, fp);
+        delete[] indirect_data;
+    }
+
+    // 更新 inode 的文件大小和时间
+    *(unsigned int*)(inode + 0x04) = size;  // i_size
+    time_t current_time = time(NULL);
+    *(unsigned int*)(inode + 0x08) = current_time; // i_atime
+    *(unsigned int*)(inode + 0x0C) = current_time; // i_ctime
+    *(unsigned int*)(inode + 0x10) = current_time; // i_mtime
+
+    // 写回 inode
+    _fseeki64(fp, inode_offset, SEEK_SET);
+    fwrite(inode, inode_size, 1, fp);
+
+    // 写入文件内容
+    size_t remaining = size;
+    const char* current_pos = content;
+    for (unsigned int i = 0; i < blocks_needed; i++) {
+        size_t write_size = (remaining > block_size) ? block_size : remaining;
+        _fseeki64(fp, (unsigned long long)partition_start * 512 + block_nums[i] * block_size, SEEK_SET);
+        fwrite(current_pos, write_size, 1, fp);
+        current_pos += write_size;
+        remaining -= write_size;
+    }
+
+    delete[] block_nums;
+    delete[] inode;
+    return true;
+}
+
+char* ext2_t::read_file(unsigned int inode_num, size_t* size) {
+    // 读取文件的 inode
+    unsigned char* inode = new unsigned char[inode_size];
+    unsigned int gn = (inode_num - 1) / inodes_per_group;
+    unsigned int index = (inode_num - 1) % inodes_per_group;
+    unsigned long inode_table_block = *(unsigned long*)(block_group_descriptor_table + gn * 32 + 8);
+    unsigned long long inode_offset = (unsigned long long)partition_start * 512 +
+        (unsigned long long)inode_table_block * block_size +
+        (unsigned long long)index * inode_size;
+
+    if (_fseeki64(fp, inode_offset, SEEK_SET) != 0 ||
+        fread(inode, inode_size, 1, fp) != 1) {
+        printf("Failed to read inode.\n");
+        delete[] inode;
+        return nullptr;
+    }
+
+    // 获取文件大小
+    *size = *(unsigned int*)(inode + 0x04);
+    char* content = new char[*size + 1];
+    content[*size] = '\0';
+
+    // 读取直接块
+    size_t bytes_read = 0;
+    for (int i = 0; i < 12 && bytes_read < *size; i++) {
+        unsigned int block_num = *(unsigned int*)(inode + 0x28 + i * 4);
+        if (block_num == 0) break;
+
+        size_t read_size = (*size - bytes_read > block_size) ? block_size : (*size - bytes_read);
+        _fseeki64(fp, (unsigned long long)partition_start * 512 + block_num * block_size, SEEK_SET);
+        fread(content + bytes_read, read_size, 1, fp);
+        bytes_read += read_size;
+    }
+
+    // 读取间接块
+    if (bytes_read < *size) {
+        unsigned int indirect_block = *(unsigned int*)(inode + 0x28 + 48);
+        if (indirect_block != 0) {
+            unsigned int* indirect_data = new unsigned int[block_size / 4];
+            _fseeki64(fp, (unsigned long long)partition_start * 512 + indirect_block * block_size, SEEK_SET);
+            fread(indirect_data, block_size, 1, fp);
+
+            for (unsigned int i = 0; i < block_size / 4 && bytes_read < *size; i++) {
+                if (indirect_data[i] == 0) break;
+
+                size_t read_size = (*size - bytes_read > block_size) ? block_size : (*size - bytes_read);
+                _fseeki64(fp, (unsigned long long)partition_start * 512 + indirect_data[i] * block_size, SEEK_SET);
+                fread(content + bytes_read, read_size, 1, fp);
+                bytes_read += read_size;
+            }
+
+            delete[] indirect_data;
+        }
+    }
+
+    delete[] inode;
+    return content;
+}
+
+bool ext2_t::delete_file(unsigned int parent_inode, const char* name) {
+    if (!remove_directory_entry(parent_inode, name)) {
+        return false;
+    }
+    return true;
+}
+
+bool ext2_t::delete_directory(unsigned _int32 parent_inode, const char* name) {
+    // 首先找到目录的 inode 号
+    unsigned char* parent_inode_data = new unsigned char[inode_size];
+    unsigned int parent_gn = (parent_inode - 1) / inodes_per_group;
+    unsigned int parent_index = (parent_inode - 1) % inodes_per_group;
+    unsigned long parent_inode_table_block = *(unsigned long*)(block_group_descriptor_table + parent_gn * 32 + 8);
+    unsigned long long parent_inode_offset = (unsigned long long)partition_start * 512 +
+        (unsigned long long)parent_inode_table_block * block_size +
+        (unsigned long long)parent_index * inode_size;
+
+    if (_fseeki64(fp, parent_inode_offset, SEEK_SET) != 0 ||
+        fread(parent_inode_data, inode_size, 1, fp) != 1) {
+        printf("Failed to read parent inode.\n");
+        delete[] parent_inode_data;
+        return false;
+    }
+
+    // 获取目录的 inode 号
+    unsigned int dir_block = *(unsigned int*)(parent_inode_data + 0x28);
+    unsigned char* dir_data = new unsigned char[block_size];
+    if (_fseeki64(fp, (unsigned long long)partition_start * 512 + dir_block * block_size, SEEK_SET) != 0 ||
+        fread(dir_data, block_size, 1, fp) != 1) {
+        printf("Failed to read directory block.\n");
+        delete[] dir_data;
+        delete[] parent_inode_data;
+        return false;
+    }
+
+    // 查找目录项
+    struct ext2_dir_entry {
+        unsigned int inode;
+        unsigned short rec_len;
+        unsigned char name_len;
+        unsigned char file_type;
+        char name[256];
+    } *dir_entry;
+
+    unsigned int offset = 0;
+    unsigned int target_inode = 0;
+    while (offset < block_size) {
+        dir_entry = (ext2_dir_entry*)(dir_data + offset);
+        if (dir_entry->inode != 0 &&
+            dir_entry->name_len == strlen(name) &&
+            strncmp(dir_entry->name, name, dir_entry->name_len) == 0) {
+            target_inode = dir_entry->inode;
+            break;
+        }
+        offset += dir_entry->rec_len;
+    }
+
+    if (target_inode == 0) {
+        printf("Directory not found.\n");
+        delete[] dir_data;
+        delete[] parent_inode_data;
+        return false;
+    }
+
+    // 递归删除目录及其内容
+    if (!recursive_delete_directory(target_inode)) {
+        printf("Failed to delete directory contents.\n");
+        delete[] dir_data;
+        delete[] parent_inode_data;
+        return false;
+    }
+
+    // 从父目录中移除目录项
+    if (!remove_directory_entry(parent_inode, name)) {
+        printf("Failed to remove directory entry.\n");
+        delete[] dir_data;
+        delete[] parent_inode_data;
+        return false;
+    }
+
+    delete[] dir_data;
+    delete[] parent_inode_data;
+    return true;
+}
+
+bool ext2_t::recursive_delete_directory(unsigned int dir_inode) {
+    unsigned char* inode_data = new unsigned char[inode_size];
+    unsigned int gn = (dir_inode - 1) / inodes_per_group;
+    unsigned int index = (dir_inode - 1) % inodes_per_group;
+    unsigned long inode_table_block = *(unsigned long*)(block_group_descriptor_table + gn * 32 + 8);
+    unsigned long long inode_offset = (unsigned long long)partition_start * 512 +
+        (unsigned long long)inode_table_block * block_size +
+        (unsigned long long)index * inode_size;
+
+    if (_fseeki64(fp, inode_offset, SEEK_SET) != 0 ||
+        fread(inode_data, inode_size, 1, fp) != 1) {
+        delete[] inode_data;
+        return false;
+    }
+
+    // 读取目录的数据块
+    unsigned int dir_block = *(unsigned int*)(inode_data + 0x28);
+    unsigned char* dir_data = new unsigned char[block_size];
+    if (_fseeki64(fp, (unsigned long long)partition_start * 512 + dir_block * block_size, SEEK_SET) != 0 ||
+        fread(dir_data, block_size, 1, fp) != 1) {
+        delete[] dir_data;
+        delete[] inode_data;
+        return false;
+    }
+
+    // 遍历目录项
+    struct ext2_dir_entry {
+        unsigned int inode;
+        unsigned short rec_len;
+        unsigned char name_len;
+        unsigned char file_type;
+        char name[256];
+    } *dir_entry;
+
+    unsigned int offset = 0;
+    while (offset < block_size) {
+        dir_entry = (ext2_dir_entry*)(dir_data + offset);
+        if (dir_entry->inode != 0) {
+            // 跳过 "." 和 ".." 目录
+            if (!(dir_entry->name_len == 1 && dir_entry->name[0] == '.') &&
+                !(dir_entry->name_len == 2 && dir_entry->name[0] == '.' && dir_entry->name[1] == '.')) {
+
+                char entry_name[256];
+                strncpy(entry_name, dir_entry->name, dir_entry->name_len);
+                entry_name[dir_entry->name_len] = '\0';
+
+                if (dir_entry->file_type == 2) { // 目录
+                    if (!recursive_delete_directory(dir_entry->inode)) {
+                        delete[] dir_data;
+                        delete[] inode_data;
+                        return false;
+                    }
+                }
+                // 释放 inode 和数据块
+                free_inode(dir_entry->inode);
+            }
+        }
+        offset += dir_entry->rec_len;
+    }
+
+    // 释放目录自身的 inode 和数据块
+    free_block(dir_block);
+    free_inode(dir_inode);
+
+    delete[] dir_data;
+    delete[] inode_data;
+    return true;
+}
+
+bool ext2_t::remove_directory_entry(unsigned int parent_inode, const char* name) {
+    unsigned char* parent_inode_data = new unsigned char[inode_size];
+    unsigned int parent_gn = (parent_inode - 1) / inodes_per_group;
+    unsigned int parent_index = (parent_inode - 1) % inodes_per_group;
+    unsigned long parent_inode_table_block = *(unsigned long*)(block_group_descriptor_table + parent_gn * 32 + 8);
+    unsigned long long parent_inode_offset = (unsigned long long)partition_start * 512 +
+        (unsigned long long)parent_inode_table_block * block_size +
+        (unsigned long long)parent_index * inode_size;
+
+    if (_fseeki64(fp, parent_inode_offset, SEEK_SET) != 0 ||
+        fread(parent_inode_data, inode_size, 1, fp) != 1) {
+        delete[] parent_inode_data;
+        return false;
+    }
+
+    // 读取父目录的数据块
+    unsigned int parent_block = *(unsigned int*)(parent_inode_data + 0x28);
+    unsigned char* dir_data = new unsigned char[block_size];
+    if (_fseeki64(fp, (unsigned long long)partition_start * 512 + parent_block * block_size, SEEK_SET) != 0 ||
+        fread(dir_data, block_size, 1, fp) != 1) {
+        delete[] dir_data;
+        delete[] parent_inode_data;
+        return false;
+    }
+
+    struct ext2_dir_entry {
+        unsigned int inode;
+        unsigned short rec_len;
+        unsigned char name_len;
+        unsigned char file_type;
+        char name[256];
+    } *dir_entry, * prev_entry = nullptr;
+
+    unsigned int offset = 0;
+    while (offset < block_size) {
+        dir_entry = (ext2_dir_entry*)(dir_data + offset);
+        if (dir_entry->name_len == strlen(name) &&
+            strncmp(dir_entry->name, name, dir_entry->name_len) == 0) {
+
+            // 如果不是最后一个条目，将后面的条目向前移动
+            if (offset + dir_entry->rec_len < block_size) {
+                memmove(dir_data + offset,
+                    dir_data + offset + dir_entry->rec_len,
+                    block_size - offset - dir_entry->rec_len);
+                if (prev_entry) {
+                    prev_entry->rec_len += dir_entry->rec_len;
+                }
+            }
+            else if (prev_entry) {
+                // 如果是最后一个条目，增加前一个条目的长度
+                prev_entry->rec_len += dir_entry->rec_len;
+            }
+
+            // 写回目录块
+            _fseeki64(fp, (unsigned long long)partition_start * 512 + parent_block * block_size, SEEK_SET);
+            fwrite(dir_data, block_size, 1, fp);
+
+            delete[] dir_data;
+            delete[] parent_inode_data;
+            return true;
+        }
+        prev_entry = dir_entry;
+        offset += dir_entry->rec_len;
+    }
+
+    delete[] dir_data;
+    delete[] parent_inode_data;
+    return false;
+}
+
+void ext2_t::free_inode(unsigned int inode_num) {
+    unsigned int group = (inode_num - 1) / inodes_per_group;
+    unsigned int index = (inode_num - 1) % inodes_per_group;
+    unsigned int byte_index = index / 8;
+    unsigned int bit_index = index % 8;
+
+    // 读取 inode 位图
+    unsigned long inode_bitmap_block = *(unsigned long*)(block_group_descriptor_table + group * 32 + 4);
+    unsigned char* bitmap = new unsigned char[block_size];
+
+    _fseeki64(fp, (unsigned long long)partition_start * 512 + inode_bitmap_block * block_size, SEEK_SET);
+    fread(bitmap, block_size, 1, fp);
+
+    // 清除位图中的相应位
+    bitmap[byte_index] &= ~(1 << bit_index);
+
+    // 写回位图
+    _fseeki64(fp, (unsigned long long)partition_start * 512 + inode_bitmap_block * block_size, SEEK_SET);
+    fwrite(bitmap, block_size, 1, fp);
+
+    delete[] bitmap;
+}
+
+void ext2_t::free_block(unsigned int block_num) {
+    unsigned int group = block_num / blocks_per_group;
+    unsigned int index = block_num % blocks_per_group;
+    unsigned int byte_index = index / 8;
+    unsigned int bit_index = index % 8;
+
+    // 读取块位图
+    unsigned long block_bitmap_block = *(unsigned long*)(block_group_descriptor_table + group * 32);
+    unsigned char* bitmap = new unsigned char[block_size];
+
+    _fseeki64(fp, (unsigned long long)partition_start * 512 + block_bitmap_block * block_size, SEEK_SET);
+    fread(bitmap, block_size, 1, fp);
+
+    // 清除位图中的相应位
+    bitmap[byte_index] &= ~(1 << bit_index);
+
+    // 写回位图
+    _fseeki64(fp, (unsigned long long)partition_start * 512 + block_bitmap_block * block_size, SEEK_SET);
+    fwrite(bitmap, block_size, 1, fp);
+
+    delete[] bitmap;
 }

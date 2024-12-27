@@ -50,7 +50,22 @@ public:
     void get_file_blocks(unsigned _int32 inode_num); // 获取文件的数据块，支持多级索引
     bool validate_block_number(unsigned int block_num, const char* block_type);
     void read_indirect_block(unsigned int block_num, int level, std::set<unsigned int>& seen_blocks);
-
+    void create_directory(unsigned _int32 parent_inode, const char* dir_name); // 创建新目录
+    unsigned int allocate_inode(); // 分配一个新的 inode
+    unsigned int allocate_block();
+    // 文件操作函数
+    unsigned int create_file(unsigned int parent_inode, const char* filename, unsigned int mode);
+    bool write_file(unsigned int inode_num, const char* content, size_t size);
+    char* read_file(unsigned int inode_num, size_t* size);
+    bool delete_file(unsigned int parent_inode, const char* name);
+    bool delete_directory(unsigned int parent_inode, const char* name);
+    // 辅助函数
+    bool remove_directory_entry(unsigned int parent_inode, const char* name);
+    void free_inode(unsigned int inode_num);
+    void free_block(unsigned int block_num);
+    bool recursive_delete_directory(unsigned int dir_inode);
 
     bool valid; // 文件系统是否有效
+
+
 };
