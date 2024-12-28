@@ -4,6 +4,9 @@
 #include <time.h>
 #include <string.h>
 #include <set>
+#include <vector>
+#include <string>
+#include<algorithm>
 
 class ext2_t
 {
@@ -45,6 +48,7 @@ public:
     void dump_block(unsigned int bn); // 打印指定块
     void dump_super_block(); // 打印超级块
     void dump_inode(unsigned _int32 inode); // 打印指定索引节点
+    void list_directory(unsigned int dir_inode, const std::string& prefix);
     void ls_root(); // 查找并显示根目录内容
     unsigned int* read_block(unsigned int block_num);
     void get_file_blocks(unsigned _int32 inode_num); // 获取文件的数据块，支持多级索引
@@ -63,7 +67,11 @@ public:
     bool remove_directory_entry(unsigned int parent_inode, const char* name);
     void free_inode(unsigned int inode_num);
     void free_block(unsigned int block_num);
+    void show_tree(unsigned int inode_num);
+    void show_tree_recursive(unsigned int inode_num, const char* prefix, bool last);
     bool recursive_delete_directory(unsigned int dir_inode);
+    bool add_entry_to_dir(FILE* fp, unsigned __int64 partition_start, unsigned int block_size, unsigned int dir_block,
+        unsigned int new_inode, const char* name, unsigned char file_type);
 
     bool valid; // 文件系统是否有效
 

@@ -141,6 +141,18 @@ int main(int argc, char* argv[])
                 ext2.delete_directory(parent_inode, arg[2].c_str());
             }
         }
+        else if (arg[0] == "tree") 
+        {
+            if (arg.size() > 1) {
+                // 如果提供了inode号，从指定目录开始显示
+                unsigned int start_inode = (unsigned int)_strtoi64(arg[1].c_str(), NULL, 10);
+                ext2.show_tree(start_inode);
+            }
+            else {
+                // 默认从根目录(inode 2)开始显示
+                ext2.show_tree(2);
+            }
+        }
         else
         {
             if (arg[0] == "?" || arg[0] == "h" || arg[0] == "H") // 帮助命令
@@ -153,6 +165,7 @@ int main(int argc, char* argv[])
             printf("?|h|H 显示帮助\n");
             printf("b N   显示文件系统中的第 N 个块\n");
             printf("dump_inode N   显示文件系统中的第 N 个索引节点\n");
+            printf("super    查看超级快\n");
             printf("ls_root   显示根目录内容\n");
             printf("ls   显示根目录内容\n");
             printf("mkdir <parent_inode> <directory_name>   创建新目录\n");
@@ -161,6 +174,7 @@ int main(int argc, char* argv[])
             printf("read <inode_num>        读取文件内容\n");
             printf("rm <parent_inode> <name>        删除指定文件\n");
             printf("rmdir <parent_inode> <dirname>        删除指定文件\n");
+            printf("tree [inode]      以树形结构显示目录内容，可选择起始inode\n");
         }
     }
 
