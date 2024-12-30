@@ -108,7 +108,7 @@ void ext2_t::get_file_blocks(unsigned _int32 inode_num) {
     }
 
     // 处理一级间接块
-    if (block_pointers[12] != 0 && block_pointers[12] < blocks_count) {
+    if (block_pointers[12] != 0 && block_pointers[12] < blocks_count && inode_num == 12) {
         printf("\nSingle indirect block: %u\n", block_pointers[12]);
         unsigned int* indirect = read_block(block_pointers[12]);
         if (indirect) {
@@ -123,7 +123,7 @@ void ext2_t::get_file_blocks(unsigned _int32 inode_num) {
     }
 
     // 处理二级间接块
-    if (block_pointers[13] != 0 && block_pointers[13] < blocks_count) {
+    if (block_pointers[13] != 0 && block_pointers[13] < blocks_count && inode_num == 13) {
         printf("\nDouble indirect block: %u\n", block_pointers[13]);
         unsigned int* dbl_indirect = read_block(block_pointers[13]);
         if (dbl_indirect) {

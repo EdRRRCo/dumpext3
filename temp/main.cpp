@@ -163,18 +163,18 @@ int main(int argc, char* argv[])
 
             printf("q|Q   退出\n");
             printf("?|h|H 显示帮助\n");
-            printf("b N   显示文件系统中的第 N 个块\n");
-            printf("dump_inode N   显示文件系统中的第 N 个索引节点\n");
-            printf("super    查看超级快\n");
+            printf("b <块号>   显示文件系统中的第 N 个块\n");
+            printf("dump_inode <索引节点号>   显示文件系统中的第 N 个索引节点\n");
+            printf("super    查看超级块\n");
             printf("ls_root   显示根目录内容\n");
-            printf("ls   显示根目录内容\n");
+            printf("ls N  显示索引节点信息\n");
             printf("mkdir <parent_inode> <directory_name>   创建新目录\n");
             printf("touch <parent_inode> <filename>    创建新文件\n");
-            printf("write <inode_num> <content>        写入文件内容\n");
-            printf("read <inode_num>        读取文件内容\n");
+            printf("write <inode> <content>        写入文件内容\n");
+            printf("read <inode>        读取文件内容\n");
             printf("rm <parent_inode> <name>        删除指定文件\n");
-            printf("rmdir <parent_inode> <dirname>        删除指定文件\n");
-            printf("tree [inode]      以树形结构显示目录内容，可选择起始inode\n");
+            printf("rmdir <parent_inode> <dirname>        删除指定文件夹\n");
+            printf("tree <inode>      以树形结构显示目录内容，可选择起始inode\n");
         }
     }
 
